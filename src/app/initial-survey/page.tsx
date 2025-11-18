@@ -79,6 +79,10 @@ export default function InitialSurveyPage() {
   const router = useRouter();
   const { data: session, update } = useSession();
   const [formData, setFormData] = useState(defaultForm);
+  const [touched, setTouched] = useState({
+    sleepQuality: false,
+    exerciseHabit: false,
+  });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [completed, setCompleted] = useState(false);
@@ -93,10 +97,10 @@ export default function InitialSurveyPage() {
     if (formData.cognitiveStyle.length) filled += 1;
     if (formData.focusTime.length) filled += 1;
     if (formData.expectations.length) filled += 1;
-    if (formData.sleepQuality) filled += 1;
-    if (formData.exerciseHabit) filled += 1;
+    if (touched.sleepQuality) filled += 1;
+    if (touched.exerciseHabit) filled += 1;
     return Math.round((filled / total) * 100);
-  }, [formData]);
+  }, [formData, touched]);
 
   useEffect(() => {
     const loadProfile = async () => {
@@ -105,6 +109,10 @@ export default function InitialSurveyPage() {
       const { user } = await response.json();
       if (user?.survey?.initialSurvey) {
         setFormData({ ...defaultForm, ...user.survey.initialSurvey });
+        setTouched({
+          sleepQuality: Boolean(user.survey.initialSurvey.sleepQuality),
+          exerciseHabit: Boolean(user.survey.initialSurvey.exerciseHabit),
+        });
         setCompleted(Boolean(user.surveyCompleted));
       }
     };
@@ -304,7 +312,10 @@ export default function InitialSurveyPage() {
                     min={1}
                     max={5}
                     value={formData.sleepQuality}
-                    onChange={(event) => setFormData((prev) => ({ ...prev, sleepQuality: Number(event.target.value) }))}
+                    onChange={(event) => {
+                      setTouched((prev) => ({ ...prev, sleepQuality: true }));
+                      setFormData((prev) => ({ ...prev, sleepQuality: Number(event.target.value) }));
+                    }}
                     className="w-full accent-accent"
                   />
                   <div className="text-right text-sm text-ink">
@@ -324,7 +335,10 @@ export default function InitialSurveyPage() {
                     min={1}
                     max={5}
                     value={formData.exerciseHabit}
-                    onChange={(event) => setFormData((prev) => ({ ...prev, exerciseHabit: Number(event.target.value) }))}
+                    onChange={(event) => {
+                      setTouched((prev) => ({ ...prev, exerciseHabit: true }));
+                      setFormData((prev) => ({ ...prev, exerciseHabit: Number(event.target.value) }));
+                    }}
                     className="w-full accent-accent"
                   />
                   <div className="text-right text-sm text-ink">
