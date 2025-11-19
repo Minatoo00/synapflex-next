@@ -33,20 +33,50 @@ const expectations = [
   "other",
 ] as const;
 
+const genders = ["Male", "Female", "Other", "PreferNotToSay"] as const;
+
+const occupations = [
+  "KnowledgeWorker",
+  "Creative",
+  "Student",
+  "Caregiver",
+  "Healthcare",
+  "Education",
+  "Other",
+  "PreferNotToSay",
+] as const;
+
+const deviceUsages = ["under2h", "2to4h", "4to6h", "6to8h", "over8h"] as const;
+
 const surveySchema = z.object({
   age: z.string().max(3).optional().or(z.literal("")),
-  gender: z.string(),
-  otherGender: z.string().optional().or(z.literal("")),
-  occupation: z.string(),
-  otherOccupation: z.string().optional().or(z.literal("")),
+  gender: z.enum(genders, { required_error: "性別を選択してください" }),
+  otherGender: z.string().max(40).optional().or(z.literal("")),
+  occupation: z.enum(occupations, { required_error: "職業を選択してください" }),
+  otherOccupation: z.string().max(80).optional().or(z.literal("")),
   sleepQuality: z.coerce.number().min(1).max(5),
   exerciseHabit: z.coerce.number().min(1).max(5),
   cognitiveStyle: z.array(z.enum(cognitiveStyles)).max(cognitiveStyles.length),
   thinkingSpeed: z.coerce.number().min(1).max(5),
   thinkingFlexibility: z.coerce.number().min(1).max(5),
   focusTime: z.array(z.enum(focusTimes)).max(focusTimes.length),
-  deviceUsage: z.string(),
+  deviceUsage: z.enum(deviceUsages, { required_error: "デバイス利用時間を選択してください" }),
   expectations: z.array(z.enum(expectations)).max(2),
+}).superRefine((data, ctx) => {
+  if (data.gender === "Other" && !data.otherGender?.trim()) {
+    ctx.addIssue({
+      path: ["otherGender"],
+      code: z.ZodIssueCode.custom,
+      message: "その他を選んだ場合は具体的に入力してください",
+    });
+  }
+  if (data.occupation === "Other" && !data.otherOccupation?.trim()) {
+    ctx.addIssue({
+      path: ["otherOccupation"],
+      code: z.ZodIssueCode.custom,
+      message: "その他を選んだ場合は具体的に入力してください",
+    });
+  }
 });
 
 export async function GET() {

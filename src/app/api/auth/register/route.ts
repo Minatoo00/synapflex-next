@@ -6,7 +6,12 @@ import { z } from "zod";
 const registerSchema = z.object({
   email: z.string().email("メールアドレスの形式が正しくありません"),
   password: z.string().min(8, "パスワードは8文字以上で入力してください"),
-  name: z.string().min(1, "お名前を入力してください").max(80).optional(),
+  name: z
+    .string()
+    .trim()
+    .max(80, "お名前は80文字以内で入力してください")
+    .optional()
+    .or(z.literal("")), // UIは任意入力なので空文字を許容する
 });
 
 export async function POST(request: Request) {
@@ -36,7 +41,7 @@ export async function POST(request: Request) {
   const user = await prisma.user.create({
     data: {
       email: normalizedEmail,
-      name: name ?? null,
+      name: name?.trim() ? name.trim() : null,
       passwordHash,
     },
     select: {

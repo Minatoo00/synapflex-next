@@ -1,4 +1,5 @@
 import "server-only";
+import { z } from "zod";
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const OPENROUTER_SITE_URL = process.env.OPENROUTER_SITE_URL ?? "http://localhost:3000";
@@ -16,48 +17,96 @@ export type InteractionRound = {
 
 type LLMJSON = Record<string, unknown> & { error?: string };
 
-function ensureApiKey() {
+const followUpQuestionSchema = z.object({
+  id: z.string().min(1),
+  text: z.string().min(1),
+});
+
+const initialAnalysisSchema = z.object({
+  brain_activity_candidates: z.array(z.string()).optional(),
+  behavioral_pattern_candidates: z.array(z.string()).optional(),
+  follow_up_questions: z.array(followUpQuestionSchema).optional(),
+  initial_analysis_summary: z.string().optional(),
+});
+
+const finalAnalysisSchema = z.object({
+  analysis: z
+    .object({
+      hypothesis: z.string(),
+      neural_correlates: z.array(z.string()).optional(),
+      suggestions: z.array(z.string()).optional(),
+      summary: z.string().optional(),
+    })
+    .optional(),
+});
+
+const followupOutcomeSchema = z.object({
+  status: z.enum(["completed", "pending_more_followup"]),
+  analysis: finalAnalysisSchema.shape.analysis.optional(),
+  next_questions: z.array(followUpQuestionSchema).optional(),
+});
+
+const personalizedSuggestionSchema = z.object({
+  suggestions: z.array(z.string()),
+});
+
+async function callLLM(
+  prompt: string,
+  options?: { model?: string; temperature?: number; timeoutMs?: number }
+): Promise<LLMJSON> {
   if (!OPENROUTER_API_KEY) {
-    throw new Error("OPENROUTER_API_KEY is not set");
-  }
-}
-
-async function callLLM(prompt: string, options?: { model?: string; temperature?: number }) {
-  ensureApiKey();
-
-  const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-      "HTTP-Referer": OPENROUTER_SITE_URL,
-      "X-Title": OPENROUTER_SITE_NAME,
-    },
-    body: JSON.stringify({
-      model: options?.model ?? LLM_MODEL,
-      temperature: options?.temperature ?? 0.2,
-      messages: [
-        {
-          role: "system",
-          content:
-            "あなたは認知科学と臨床神経科学の両面に精通した研究者です。ユーザーの状態を丁寧に理解し、JSONのみで回答して下さい。無関係なテキストや説明文は含めてはいけません。",
-        },
-        {
-          role: "user",
-          content: prompt,
-        },
-      ],
-    }),
-  });
-
-  if (!response.ok) {
-    const errorBody = await response.text();
-    return { error: `OpenRouter error: ${response.status} ${errorBody}` };
+    return { error: "OPENROUTER_API_KEY is not set" };
   }
 
-  const data = await response.json();
-  const content: string = data.choices?.[0]?.message?.content ?? "";
-  return extractJSON(content);
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(),
+    options?.timeoutMs ?? 18000
+  );
+
+  try {
+    const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+        "HTTP-Referer": OPENROUTER_SITE_URL,
+        "X-Title": OPENROUTER_SITE_NAME,
+      },
+      body: JSON.stringify({
+        model: options?.model ?? LLM_MODEL,
+        temperature: options?.temperature ?? 0.2,
+        messages: [
+          {
+            role: "system",
+            content:
+              "あなたは認知科学と臨床神経科学の両面に精通した研究者です。ユーザーの状態を丁寧に理解し、JSONのみで回答して下さい。無関係なテキストや説明文は含めてはいけません。",
+          },
+          {
+            role: "user",
+            content: prompt,
+          },
+        ],
+      }),
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      return { error: `OpenRouter error: ${response.status} ${errorBody}` };
+    }
+
+    const data = await response.json();
+    const content: string = data.choices?.[0]?.message?.content ?? "";
+    return extractJSON(content);
+  } catch (error) {
+    if ((error as Error).name === "AbortError") {
+      return { error: "LLM request timed out" };
+    }
+    return { error: `LLM request failed: ${(error as Error).message}` };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function extractJSON(content: string): LLMJSON {
@@ -162,7 +211,15 @@ export async function analyzeFeedbackAndGenerateQuestions(rawText: string, profi
 }`,
   ].join("\n");
 
-  return callLLM(prompt);
+  const llmResponse = await callLLM(prompt);
+  if (llmResponse.error) return llmResponse;
+
+  const parsed = initialAnalysisSchema.safeParse(llmResponse);
+  if (!parsed.success) {
+    return { error: "LLM response validation failed", details: parsed.error.flatten() };
+  }
+
+  return parsed.data;
 }
 
 export async function processFollowupInteraction(
@@ -200,7 +257,15 @@ export async function processFollowupInteraction(
 }`,
   ].join("\n");
 
-  return callLLM(prompt);
+  const llmResponse = await callLLM(prompt, { temperature: 0.25 });
+  if (llmResponse.error) return llmResponse;
+
+  const parsed = followupOutcomeSchema.safeParse(llmResponse);
+  if (!parsed.success) {
+    return { error: "LLM response validation failed", details: parsed.error.flatten() };
+  }
+
+  return parsed.data;
 }
 
 export async function generateFinalAnalysis(
@@ -224,7 +289,15 @@ export async function generateFinalAnalysis(
 }`,
   ].join("\n");
 
-  return callLLM(prompt);
+  const llmResponse = await callLLM(prompt);
+  if (llmResponse.error) return llmResponse;
+
+  const parsed = finalAnalysisSchema.safeParse(llmResponse);
+  if (!parsed.success) {
+    return { error: "LLM response validation failed", details: parsed.error.flatten() };
+  }
+
+  return parsed.data;
 }
 
 export async function personalizeSuggestions(hypothesis: string, selectedTypes: string[]) {
@@ -248,5 +321,13 @@ export async function personalizeSuggestions(hypothesis: string, selectedTypes: 
   ]
 }`;
 
-  return callLLM(prompt, { temperature: 0.4 });
+  const llmResponse = await callLLM(prompt, { temperature: 0.4 });
+  if (llmResponse.error) return llmResponse;
+
+  const parsed = personalizedSuggestionSchema.safeParse(llmResponse);
+  if (!parsed.success) {
+    return { error: "LLM response validation failed", details: parsed.error.flatten() };
+  }
+
+  return parsed.data;
 }
